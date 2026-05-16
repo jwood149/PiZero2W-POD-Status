@@ -36,6 +36,7 @@ PrivateDevices=no
 DevicePolicy=closed
 DeviceAllow=/dev/spidev0.0 rw
 DeviceAllow=/dev/gpiochip0 rw
+DeviceAllow=/dev/vcio rw
 
 # Capability and syscall restrictions
 CapabilityBoundingSet=

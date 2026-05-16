@@ -3,9 +3,10 @@
 
 import json
 import socket
+import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psutil
@@ -13,7 +14,7 @@ from gpiozero import Button
 from luma.core.interface.serial import spi
 from luma.core.render import canvas
 from luma.lcd.device import ili9341
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageFont
 
 GPIO_DC = 22
 GPIO_RST = 27
@@ -32,6 +33,9 @@ DEBOUNCE_SECONDS = 0.05
 STATE_PATH = Path("/var/lib/pod-status/state.json")
 DEFAULT_STATE = {"rotation": 0, "screen_on": True}
 
+NTP_SYNC_PATH = Path("/run/systemd/timesync/synchronized")
+VCGENCMD = "/usr/bin/vcgencmd"
+
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 
@@ -39,6 +43,8 @@ WHITE = (255, 255, 255)
 DIM = (140, 140, 140)
 ACCENT = (90, 200, 255)
 WARN = (255, 180, 60)
+BAD = (255, 80, 80)
+GOOD = (120, 220, 120)
 BAR_BG = (40, 40, 40)
 BAR_FG = (90, 200, 255)
 
@@ -110,6 +116,40 @@ def cpu_freq_mhz() -> float | None:
         return None
 
 
+def ntp_synced() -> bool:
+    return NTP_SYNC_PATH.exists()
+
+
+def throttle_state() -> tuple[str, tuple[int, int, int]] | None:
+    """Parse `vcgencmd get_throttled` into a short status + color.
+    Returns None when the Pi is clean (no current or sticky throttle bits)
+    or when vcgencmd is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            [VCGENCMD, "get_throttled"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        _, hex_val = result.stdout.strip().split("=", 1)
+        bits = int(hex_val, 16)
+    except (ValueError, IndexError):
+        return None
+    if bits & 0x1:
+        return "UV", BAD
+    if bits & 0x4:
+        return "THR", BAD
+    if bits & 0x2 or bits & 0x8:
+        return "CAP", WARN
+    if bits & 0xF0000:
+        return "△", WARN
+    return None
+
+
 def uptime_str() -> str:
     secs = int(time.time() - psutil.boot_time())
     d, rem = divmod(secs, 86400)
@@ -138,14 +178,23 @@ def render_status(device, fonts):
     eth_ip = primary_ip("eth") or primary_ip("en")
     cpu_pct = psutil.cpu_percent(interval=None)
     ram = psutil.virtual_memory()
+    swap = psutil.swap_memory()
     disk = psutil.disk_usage("/")
     temp = cpu_temp_c()
     freq = cpu_freq_mhz()
-    now = datetime.now().strftime("%H:%M:%S")
+    now = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    synced = ntp_synced()
+    throttle = throttle_state()
 
     with canvas(device) as draw:
         draw.text((4, 2), hostname, font=f_big, fill=ACCENT)
-        draw.text((WIDTH - 78, 6), now, font=f_med, fill=WHITE)
+
+        clock_text = f"{now} UTC"
+        sync_mark = "OK" if synced else "NO"
+        sync_color = GOOD if synced else BAD
+        draw.text((WIDTH - 130, 4), sync_mark, font=f_small, fill=sync_color)
+        draw.text((WIDTH - 108, 4), clock_text, font=f_small, fill=WHITE)
+
         draw.line((4, 30, WIDTH - 4, 30), fill=DIM)
 
         y = 36
@@ -161,7 +210,7 @@ def render_status(device, fonts):
         draw.line((4, y, WIDTH - 4, y), fill=DIM)
         y += 8
 
-        bar_x, bar_w, bar_h = 52, 150, 12
+        bar_x, bar_w, bar_h = 52, 150, 10
         draw_bar(draw, bar_x, y, bar_w, bar_h, cpu_pct / 100.0,
                  "CPU", f"{cpu_pct:5.1f}%", f_small)
         freq_str = f"{freq/1000:.2f}GHz" if freq else "—"
@@ -170,23 +219,38 @@ def render_status(device, fonts):
         if temp is not None:
             draw.text((WIDTH - 58, y - 2), f"{temp:4.1f}°C",
                       font=f_small, fill=temp_color)
-        y += 22
+        y += 20
 
         draw_bar(draw, bar_x, y, bar_w, bar_h, ram.percent / 100.0,
                  "RAM", f"{ram.percent:5.1f}%", f_small)
         draw.text((bar_x + bar_w + 60, y - 2),
                   f"{ram.used // 1024 // 1024}/{ram.total // 1024 // 1024}MB",
                   font=f_small, fill=DIM)
-        y += 22
+        y += 20
+
+        swap_pct = swap.percent
+        draw_bar(draw, bar_x, y, bar_w, bar_h, swap_pct / 100.0,
+                 "Swap", f"{swap_pct:5.1f}%", f_small)
+        if swap.total > 0:
+            draw.text((bar_x + bar_w + 60, y - 2),
+                      f"{swap.used // 1024 // 1024}/{swap.total // 1024 // 1024}MB",
+                      font=f_small, fill=DIM)
+        else:
+            draw.text((bar_x + bar_w + 60, y - 2), "off",
+                      font=f_small, fill=DIM)
+        y += 20
 
         draw_bar(draw, bar_x, y, bar_w, bar_h, disk.percent / 100.0,
                  "Disk", f"{disk.percent:5.1f}%", f_small)
         draw.text((bar_x + bar_w + 60, y - 2),
                   f"{disk.used // (1024**3)}/{disk.total // (1024**3)}GB",
                   font=f_small, fill=DIM)
-        y += 26
+        y += 24
 
         draw.text((4, y), f"up {uptime_str()}", font=f_small, fill=DIM)
+        if throttle is not None:
+            label, color = throttle
+            draw.text((WIDTH - 40, y), label, font=f_small, fill=color)
 
 
 def render_blank(device):

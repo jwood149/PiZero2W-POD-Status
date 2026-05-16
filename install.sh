@@ -35,7 +35,7 @@ echo "==> Creating service user '$SERVICE_USER'"
 if ! getent passwd "$SERVICE_USER" >/dev/null; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
-for g in spi gpio; do
+for g in spi gpio video; do
   if getent group "$g" >/dev/null; then
     usermod -aG "$g" "$SERVICE_USER"
   else

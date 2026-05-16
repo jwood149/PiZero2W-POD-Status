@@ -9,17 +9,23 @@ Companion to [PiZero2W-PINN-ArgonPOD](../PiZero2W-PINN-ArgonPOD/) — that repo 
 ## What it looks like
 
 ```
-hostname                       12:34:56
+hostname              OK 12:34:56 UTC
 ─────────────────────────────────────────
 wlan0   192.168.1.42
 eth0    192.168.1.43
-
+─────────────────────────────────────────
 CPU  ████████░░  23.4%   1.20GHz  45.2°C
 RAM  █████░░░░░  52.1%   508/976MB
+Swap ░░░░░░░░░░   0.0%   0/512MB
 Disk ███░░░░░░░  31.0%   4/14GB
 
-up 2d 14h 7m
+up 2d 14h 7m                          UV
 ```
+
+Screen elements:
+- **Clock:** UTC, sourced from systemd-timesyncd. `OK` (green) next to the time means NTP is synced; `NO` (red) means it hasn't synced yet (or timesyncd isn't running).
+- **Bars:** CPU% with current clock speed and SoC temperature; RAM used/total in MB; Swap (covers both real swap and zram-backed swap — psutil sums them); root disk used/total in GB.
+- **Throttle indicator (bottom right):** parses `vcgencmd get_throttled`. Blank = clean. `UV` (red) = currently under-voltage. `THR` (red) = currently throttled. `CAP` (amber) = ARM frequency or soft-temp cap active. `△` (amber) = throttled or under-voltage at some point since boot but ok right now.
 
 ---
 
@@ -84,7 +90,7 @@ After reboot, the panel comes up shortly after `network-online.target`.
 
 ## Security model
 
-The service runs as a dedicated unprivileged system user `pod-status` with no login shell, no home directory, and exactly two group memberships: `spi` (for `/dev/spidev0.0`) and `gpio` (for `/dev/gpiochip0`). Nothing else.
+The service runs as a dedicated unprivileged system user `pod-status` with no login shell, no home directory, and three group memberships: `spi` (for `/dev/spidev0.0`), `gpio` (for `/dev/gpiochip0`), and `video` (for `/dev/vcio`, used by `vcgencmd` for throttle/undervolt detection). Nothing else.
 
 `pod-status.service` adds the standard systemd sandbox layer on top:
 
@@ -94,7 +100,7 @@ The service runs as a dedicated unprivileged system user `pod-status` with no lo
 | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/pod-status` | Whole filesystem is read-only except the state dir |
 | `ProtectHome=yes` | `/home`, `/root`, `/run/user` invisible |
 | `PrivateTmp=yes` | Private `/tmp` |
-| `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0 rw` + `DeviceAllow=/dev/gpiochip0 rw` | Only the two devices it actually needs |
+| `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0`, `/dev/gpiochip0`, `/dev/vcio` (rw) | Only the three devices it actually needs |
 | `NoNewPrivileges=yes` | Can't gain privileges via setuid binaries |
 | `ProtectKernelTunables/Modules/Logs=yes` | Can't poke `/proc/sys`, can't load modules, can't read kernel ring buffer |
 | `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes` | Can't create namespaces, can't request RT scheduling, can't create setuid files |
