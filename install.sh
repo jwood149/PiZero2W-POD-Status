@@ -20,10 +20,14 @@ echo "==> Installing system packages"
 apt-get update
 apt-get install -y \
   python3 python3-venv python3-pip \
-  python3-pil python3-psutil \
+  python3-pil python3-psutil python3-gpiozero python3-pigpio \
+  pigpio \
   fonts-dejavu-core \
   libraspberrypi-bin \
   libjpeg-dev libfreetype6-dev zlib1g-dev
+
+echo "==> Enabling pigpiod (GPIO daemon — talks to /dev/gpiomem as root so the service doesn't have to)"
+systemctl enable --now pigpiod
 
 echo "==> Enabling SPI in $CONFIG_TXT"
 if grep -qE '^\s*#\s*dtparam=spi=on' "$CONFIG_TXT"; then
@@ -36,7 +40,7 @@ echo "==> Creating service user '$SERVICE_USER'"
 if ! getent passwd "$SERVICE_USER" >/dev/null; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
-for g in spi gpio video; do
+for g in spi video; do
   if getent group "$g" >/dev/null; then
     usermod -aG "$g" "$SERVICE_USER"
   else

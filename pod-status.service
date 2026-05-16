@@ -1,10 +1,11 @@
 [Unit]
 Description=Argon POD TFT status panel
-After=network-online.target
-Wants=network-online.target
+After=network-online.target pigpiod.service
+Wants=network-online.target pigpiod.service
 
 [Service]
 Type=simple
+Environment=GPIOZERO_PIN_FACTORY=pigpio
 ExecStart=/opt/pod-status/venv/bin/python /opt/pod-status/pod_status.py
 Restart=on-failure
 RestartSec=5
@@ -35,7 +36,6 @@ MemoryDenyWriteExecute=yes
 PrivateDevices=no
 DevicePolicy=closed
 DeviceAllow=/dev/spidev0.0 rw
-DeviceAllow=/dev/gpiochip0 rw
 DeviceAllow=/dev/vcio rw
 
 # Capability and syscall restrictions

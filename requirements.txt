@@ -1,6 +1,6 @@
-# Pillow and psutil come from apt (python3-pil, python3-psutil) via
-# --system-site-packages in the venv — keeps installs fast and avoids
-# the libjpeg/freetype/zlib source-build dance on Pi.
+# Pillow, psutil, and gpiozero come from apt (python3-pil, python3-psutil,
+# python3-gpiozero) via --system-site-packages in the venv. GPIO access
+# goes through the pigpio daemon (apt: pigpio + python3-pigpio), which
+# sidesteps the lgpio piwheels-wheel glibc mismatch on Bullseye and the
+# /dev/mem permission issue with the RPi.GPIO fallback.
 luma.lcd>=2.12
-gpiozero>=2.0
-lgpio>=0.2

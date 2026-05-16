@@ -1,12 +1,14 @@
 # Pi Zero 2W — Argon POD Status Panel
 
-Single-page system status panel for the Argon POD 2.8" TFT (ILI9341, 320×240) on a headless Pi Zero 2W. Shows hostname, IP addresses, CPU usage / clock / temperature, RAM, disk, and uptime — refreshes every 2 seconds.
+Multi-page system status panel for the Argon POD 2.8" TFT (ILI9341, 320×240) on a headless Pi Zero 2W. Two pages today (stats + system info), cycled with a POD button. Refreshes every 2 seconds.
 
 Companion to [PiZero2W-PINN-ArgonPOD](../PiZero2W-PINN-ArgonPOD/) — that repo gets the POD usable in PINN; this one gives the TFT a job on the installed OS.
 
 ---
 
 ## What it looks like
+
+### Page 1 — Stats
 
 ```
 hostname              OK 12:34:56 UTC
@@ -19,13 +21,33 @@ RAM  █████░░░░░  52.1%   508/976MB
 Swap ░░░░░░░░░░   0.0%   0/512MB
 Disk ███░░░░░░░  31.0%   4/14GB
 
-up 2d 14h 7m                          UV
+up 2d 14h 7m              UV     1/2
 ```
 
-Screen elements:
-- **Clock:** UTC, sourced from systemd-timesyncd. `OK` (green) next to the time means NTP is synced; `NO` (red) means it hasn't synced yet (or timesyncd isn't running).
-- **Bars:** CPU% with current clock speed and SoC temperature; RAM used/total in MB; Swap (covers both real swap and zram-backed swap — psutil sums them); root disk used/total in GB.
-- **Throttle indicator (bottom right):** parses `vcgencmd get_throttled`. Blank = clean. `UV` (red) = currently under-voltage. `THR` (red) = currently throttled. `CAP` (amber) = ARM frequency or soft-temp cap active. `△` (amber) = throttled or under-voltage at some point since boot but ok right now.
+### Page 2 — System
+
+```
+hostname              OK 12:34:56 UTC
+─────────────────────────────────────────
+Model   Raspberry Pi Zero 2 W
+OS      Raspberry Pi OS Lite (Trixie)
+Ver     13 (trixie)
+Kernel  6.6.51-rpt2-v7
+─────────────────────────────────────────
+SSH       active
+Connect   inactive
+
+up 2d 14h 7m                     2/2
+```
+
+### Screen elements
+
+- **Clock (header, both pages):** UTC, sourced from systemd-timesyncd. `OK` (green) next to the time means NTP is synced; `NO` (red) means it hasn't synced yet (or timesyncd isn't running).
+- **Stats bars (Page 1):** CPU% with current clock speed and SoC temperature; RAM used/total in MB; Swap (covers both real swap and zram-backed swap — psutil sums them); root disk used/total in GB.
+- **System info (Page 2):** Pi model from `/proc/device-tree/model`, OS pretty name + version from `/etc/os-release`, kernel from `uname -r`.
+- **Service status (Page 2):** `systemctl is-active` results for the services in `TRACKED_SERVICES` (default: `ssh`, `rpi-connect`). Green when active, dim otherwise. Edit the list in [pod_status.py](pod_status.py) to add more (e.g. `avahi-daemon`, `NetworkManager`, `fail2ban`).
+- **Throttle indicator (footer, both pages):** parses `vcgencmd get_throttled`. Blank = clean. `UV` (red) = currently under-voltage. `THR` (red) = currently throttled. `CAP` (amber) = ARM frequency or soft-temp cap active. `△` (amber) = throttled or under-voltage at some point since boot but ok right now.
+- **Page indicator (footer, both pages):** `N/total` in the bottom-right corner.
 
 ---
 
@@ -44,12 +66,12 @@ Should also work on Bookworm and other ARMv7/v8 Pis with the same TFT wiring.
 
 | Button | GPIO | Action |
 |---|---|---|
-| 1 | 16 | Cycle rotation (0° → 90° → 180° → 270° → 0°) |
-| 2 | 20 | Reserved (future multi-page nav) |
-| 3 | 21 | Reserved (future multi-page nav) |
+| 1 | 16 | Cycle page (1 → 2 → … → 1) |
+| 2 | 20 | Cycle rotation (0° → 90° → 180° → 270° → 0°) |
+| 3 | 21 | Reserved |
 | 4 | 26 | Toggle screen on/off |
 
-State (rotation + on/off) is persisted to `/var/lib/pod-status/state.json` and survives reboots.
+State (current page + rotation + on/off) is persisted to `/var/lib/pod-status/state.json` and survives reboots.
 
 > Screen on/off draws an all-black frame and stops refreshing. The POD's backlight is hardwired to 3V3, so the panel will still glow faintly when "off" — true power-off would require a hardware mod to put the backlight on a GPIO.
 
@@ -75,12 +97,13 @@ sudo reboot
 ```
 
 The installer:
-- Installs system Python plus `python3-pil` (Pillow), `python3-psutil`, `fonts-dejavu-core`, and `libraspberrypi-bin` (provides `vcgencmd`)
+- Installs system Python plus `python3-pil` (Pillow), `python3-psutil`, `python3-gpiozero`, `python3-pigpio`, `pigpio` (daemon), `fonts-dejavu-core`, `libraspberrypi-bin` (provides `vcgencmd`), and Pillow source-build deps as a fallback
+- Enables `pigpiod` — handles all GPIO access so our service never needs `/dev/mem` or `/dev/gpiochip0`
 - Enables `dtparam=spi=on` in `config.txt` (idempotent)
-- Creates an unprivileged system user `pod-status` and adds it to the `spi` + `gpio` groups
+- Creates an unprivileged system user `pod-status` and adds it to the `spi` + `video` groups
 - Copies sources to `/opt/pod-status/` (root-owned, read-only to the service)
-- Creates a virtualenv at `/opt/pod-status/venv` **with `--system-site-packages`** so apt's Pillow and psutil are used directly — no slow pip source-compile
-- pip-installs `luma.lcd`, `gpiozero`, `lgpio` (which all have piwheels-cached wheels for armv7l)
+- Creates a virtualenv at `/opt/pod-status/venv` **with `--system-site-packages`** so apt's Pillow / psutil / gpiozero / pigpio client lib are used directly — no slow pip source-compile
+- pip-installs only `luma.lcd` (the one library with no apt package)
 - Creates `/var/lib/pod-status/` (writable only by the service user, mode 0750)
 - Installs and enables `pod-status.service`
 
@@ -90,7 +113,7 @@ After reboot, the panel comes up shortly after `network-online.target`.
 
 ## Security model
 
-The service runs as a dedicated unprivileged system user `pod-status` with no login shell, no home directory, and three group memberships: `spi` (for `/dev/spidev0.0`), `gpio` (for `/dev/gpiochip0`), and `video` (for `/dev/vcio`, used by `vcgencmd` for throttle/undervolt detection). Nothing else.
+The service runs as a dedicated unprivileged system user `pod-status` with no login shell, no home directory, and two group memberships: `spi` (for `/dev/spidev0.0`) and `video` (for `/dev/vcio`, used by `vcgencmd`). GPIO access is delegated to `pigpiod` over a localhost socket — our service never opens `/dev/mem` or `/dev/gpiochip0` directly, so it doesn't need the `gpio` group at all.
 
 `pod-status.service` adds the standard systemd sandbox layer on top:
 
@@ -100,7 +123,7 @@ The service runs as a dedicated unprivileged system user `pod-status` with no lo
 | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/pod-status` | Whole filesystem is read-only except the state dir |
 | `ProtectHome=yes` | `/home`, `/root`, `/run/user` invisible |
 | `PrivateTmp=yes` | Private `/tmp` |
-| `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0`, `/dev/gpiochip0`, `/dev/vcio` (rw) | Only the three devices it actually needs |
+| `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0`, `/dev/vcio` (rw) | Only the two devices it actually needs — GPIO chip goes through pigpiod |
 | `NoNewPrivileges=yes` | Can't gain privileges via setuid binaries |
 | `ProtectKernelTunables/Modules/Logs=yes` | Can't poke `/proc/sys`, can't load modules, can't read kernel ring buffer |
 | `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes` | Can't create namespaces, can't request RT scheduling, can't create setuid files |
