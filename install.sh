@@ -68,6 +68,10 @@ python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
 chown -R root:root "$INSTALL_DIR"
 chmod -R a+rX "$INSTALL_DIR"
 
+echo "==> Generating default Raspberry Pi background image (skip if one already exists)"
+install -m 0644 "$SRC_DIR/generate_background.py" "$INSTALL_DIR/generate_background.py"
+"$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/generate_background.py"
+
 echo "==> Installing systemd unit"
 install -m 0644 "$SRC_DIR/pod-status.service" /etc/systemd/system/pod-status.service
 systemctl daemon-reload

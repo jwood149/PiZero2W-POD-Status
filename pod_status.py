@@ -40,6 +40,9 @@ VALID_ROTATIONS = (0, 2)
 STATE_PATH = Path("/var/lib/pod-status/state.json")
 DEFAULT_STATE = {"rotation": 0, "screen_on": True, "current_page": 0}
 
+BACKGROUND_PATH = Path("/opt/pod-status/background.png")
+BACKGROUND_DIM_ALPHA = 0.65
+
 NTP_SYNC_PATH = Path("/run/systemd/timesync/synchronized")
 VCGENCMD = "/usr/bin/vcgencmd"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -271,6 +274,22 @@ def services_status(services: list[str]) -> dict[str, str]:
             for i, s in enumerate(services)}
 
 
+def load_background(device_mode: str) -> Image.Image | None:
+    """Load /opt/pod-status/background.png if present, resize to panel size,
+    and pre-darken so it stays subtle behind the foreground text. Passed
+    to canvas() as the starting image each frame."""
+    if not BACKGROUND_PATH.exists():
+        return None
+    try:
+        img = Image.open(BACKGROUND_PATH).convert(device_mode)
+        if img.size != (WIDTH, HEIGHT):
+            img = img.resize((WIDTH, HEIGHT))
+        black = Image.new(device_mode, img.size, "black")
+        return Image.blend(img, black, alpha=BACKGROUND_DIM_ALPHA)
+    except (OSError, ValueError):
+        return None
+
+
 def draw_bar(draw, x, y, w, h, frac, label, value, font):
     frac = max(0.0, min(1.0, frac))
     draw.rectangle((x, y, x + w, y + h), fill=BAR_BG)
@@ -302,7 +321,7 @@ def render_footer(draw, fonts, page):
     draw.text((WIDTH - 36, y), f"{page + 1}/{PAGES}", font=f_small, fill=DIM)
 
 
-def render_stats(device, fonts):
+def render_stats(device, fonts, background):
     f_small, f_med, _ = fonts
 
     wlan_ip = primary_ip("wlan") or "—"
@@ -317,7 +336,7 @@ def render_stats(device, fonts):
     procs = process_counts()
     ncpu = psutil.cpu_count(logical=True) or 4
 
-    with canvas(device) as draw:
+    with canvas(device, background=background) as draw:
         render_header(draw, fonts)
 
         y = 36
@@ -394,7 +413,7 @@ def render_stats(device, fonts):
         render_footer(draw, fonts, page=0)
 
 
-def render_system(device, fonts):
+def render_system(device, fonts, background):
     f_small = fonts[0]
 
     model = pi_model()
@@ -403,7 +422,7 @@ def render_system(device, fonts):
     statuses = services_status(TRACKED_SERVICES)
     synced = ntp_synced()
 
-    with canvas(device) as draw:
+    with canvas(device, background=background) as draw:
         render_header(draw, fonts)
 
         y = 38
@@ -448,11 +467,11 @@ def render_system(device, fonts):
         render_footer(draw, fonts, page=1)
 
 
-def render_page(device, fonts, page):
+def render_page(device, fonts, background, page):
     if page == 1:
-        render_system(device, fonts)
+        render_system(device, fonts, background)
     else:
-        render_stats(device, fonts)
+        render_stats(device, fonts, background)
 
 
 def render_blank(device):
@@ -486,6 +505,7 @@ def main():
 
     current_rotation, current_on, current_page = state.snapshot()
     device = make_device(current_rotation)
+    background = load_background(device.mode)
     if not current_on:
         render_blank(device)
 
@@ -503,7 +523,7 @@ def main():
                     render_blank(device)
 
         if current_on:
-            render_page(device, fonts, current_page)
+            render_page(device, fonts, background, current_page)
 
         time.sleep(REFRESH_SECONDS)
 

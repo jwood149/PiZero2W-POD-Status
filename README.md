@@ -85,6 +85,37 @@ State (current page + rotation + on/off) is persisted to `/var/lib/pod-status/st
 
 > Screen on/off draws an all-black frame and stops refreshing. The POD's backlight is hardwired to 3V3, so the panel will still glow faintly when "off" — true power-off would require a hardware mod to put the backlight on a GPIO.
 
+> Rotation is intentionally limited to 0° and 180° (landscape). 90°/270° put the ILI9341 into portrait and the 320×240 layout doesn't fit, which manifests as visible flicker/garbled output. State files with rotation 1 or 3 are clamped to 0 on load.
+
+---
+
+## Background image
+
+The installer generates `/opt/pod-status/background.png` — a stylized Raspberry Pi (heart-shape berry of 8 red circles, two pointed green leaves curving outward) via [generate_background.py](generate_background.py). The renderer passes it as the `background=` kwarg to luma's `canvas()` each frame, pre-darkened by `BACKGROUND_DIM_ALPHA = 0.65` (35% of source brightness) so the foreground text retains ~5:1 contrast against the colored patches.
+
+To use your own image instead:
+
+```bash
+sudo cp my-pi-logo.png /opt/pod-status/background.png
+sudo systemctl restart pod-status
+```
+
+Any size — resized to 320×240 on load. Regenerate the default:
+
+```bash
+sudo /opt/pod-status/venv/bin/python /opt/pod-status/generate_background.py --force
+sudo systemctl restart pod-status
+```
+
+No background — plain black:
+
+```bash
+sudo rm /opt/pod-status/background.png
+sudo systemctl restart pod-status
+```
+
+If you want the logo more visible, lower `BACKGROUND_DIM_ALPHA` in [pod_status.py](pod_status.py) toward `0.50`. More subtle, raise toward `0.80`.
+
 ---
 
 ## How it talks to the display
