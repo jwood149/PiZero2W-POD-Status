@@ -8,7 +8,43 @@ Type=simple
 ExecStart=/opt/pod-status/venv/bin/python /opt/pod-status/pod_status.py
 Restart=on-failure
 RestartSec=5
-User=root
+
+User=pod-status
+Group=pod-status
+
+# Filesystem isolation
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/pod-status
+
+# Kernel and process isolation
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/spidev0.0 rw
+DeviceAllow=/dev/gpiochip0 rw
+
+# Capability and syscall restrictions
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

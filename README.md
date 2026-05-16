@@ -71,11 +71,44 @@ sudo reboot
 The installer:
 - Installs `python3-venv`, `python3-pip`, `fonts-dejavu-core`
 - Enables `dtparam=spi=on` in `config.txt` (idempotent)
-- Copies sources to `/opt/pod-status/`
-- Creates a virtualenv at `/opt/pod-status/venv` and pip-installs `luma.lcd`, `psutil`, `Pillow`
+- Creates an unprivileged system user `pod-status` and adds it to the `spi` + `gpio` groups
+- Copies sources to `/opt/pod-status/` (root-owned, read-only to the service)
+- Creates a virtualenv at `/opt/pod-status/venv` and pip-installs `luma.lcd`, `psutil`, `Pillow`, `gpiozero`, `lgpio`
+- Creates `/var/lib/pod-status/` (writable only by the service user, mode 0750)
 - Installs and enables `pod-status.service`
 
 After reboot, the panel comes up shortly after `network-online.target`.
+
+---
+
+## Security model
+
+The service runs as a dedicated unprivileged system user `pod-status` with no login shell, no home directory, and exactly two group memberships: `spi` (for `/dev/spidev0.0`) and `gpio` (for `/dev/gpiochip0`). Nothing else.
+
+`pod-status.service` adds the standard systemd sandbox layer on top:
+
+| Directive | What it blocks |
+|---|---|
+| `User=pod-status` + `CapabilityBoundingSet=` (empty) | No root, no capabilities — can't bind low ports, can't `mount`, can't `chown`, can't `setuid`, nothing |
+| `ProtectSystem=strict` + `ReadWritePaths=/var/lib/pod-status` | Whole filesystem is read-only except the state dir |
+| `ProtectHome=yes` | `/home`, `/root`, `/run/user` invisible |
+| `PrivateTmp=yes` | Private `/tmp` |
+| `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0 rw` + `DeviceAllow=/dev/gpiochip0 rw` | Only the two devices it actually needs |
+| `NoNewPrivileges=yes` | Can't gain privileges via setuid binaries |
+| `ProtectKernelTunables/Modules/Logs=yes` | Can't poke `/proc/sys`, can't load modules, can't read kernel ring buffer |
+| `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes` | Can't create namespaces, can't request RT scheduling, can't create setuid files |
+| `LockPersonality=yes`, `MemoryDenyWriteExecute=yes` | Can't change exec personality, can't allocate W+X memory (no JIT) |
+| `SystemCallFilter=@system-service` minus `@privileged @resources` | Syscall surface trimmed to the @system-service set |
+
+If `pod_status.py` ever had a bug or vulnerability, the blast radius is its own state dir. It can't modify its own code (root-owned `/opt/pod-status`), can't touch the rest of the filesystem, can't escalate, and can't speak to any device other than the SPI port and the GPIO controller.
+
+To verify the sandbox is active after install:
+
+```bash
+systemd-analyze security pod-status
+```
+
+A score under ~2.0 is "safe" by systemd's reckoning.
 
 ---
 
@@ -91,7 +124,7 @@ sudo journalctl -u pod-status -f
 
 ## Customizing
 
-Edit `/opt/pod-status/pod_status.py` and `sudo systemctl restart pod-status`.
+Edit `/opt/pod-status/pod_status.py` (root-owned — use `sudo`) and `sudo systemctl restart pod-status`.
 
 Common tweaks:
 
