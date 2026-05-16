@@ -35,6 +35,7 @@ REFRESH_SECONDS = 2
 DEBOUNCE_SECONDS = 0.05
 
 PAGES = 2
+VALID_ROTATIONS = (0, 2)
 
 STATE_PATH = Path("/var/lib/pod-status/state.json")
 DEFAULT_STATE = {"rotation": 0, "screen_on": True, "current_page": 0}
@@ -68,13 +69,15 @@ class State:
             loaded.update(json.loads(path.read_text()))
         except (OSError, ValueError):
             pass
-        self.rotation = int(loaded.get("rotation", 0)) % 4
+        loaded_rot = int(loaded.get("rotation", 0)) % 4
+        self.rotation = loaded_rot if loaded_rot in VALID_ROTATIONS else 0
         self.screen_on = bool(loaded.get("screen_on", True))
         self.current_page = int(loaded.get("current_page", 0)) % PAGES
 
     def cycle_rotation(self):
         with self.lock:
-            self.rotation = (self.rotation + 1) % 4
+            idx = VALID_ROTATIONS.index(self.rotation)
+            self.rotation = VALID_ROTATIONS[(idx + 1) % len(VALID_ROTATIONS)]
         self.dirty.set()
         self._save()
 

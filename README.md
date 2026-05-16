@@ -77,7 +77,7 @@ Should also work on Bookworm and other ARMv7/v8 Pis with the same TFT wiring.
 | Button | GPIO | Action |
 |---|---|---|
 | 1 | 16 | Cycle page (1 → 2 → … → 1) |
-| 2 | 20 | Cycle rotation (0° → 90° → 180° → 270° → 0°) |
+| 2 | 20 | Toggle rotation (0° ↔ 180°) |
 | 3 | 21 | Reserved |
 | 4 | 26 | Toggle screen on/off |
 
