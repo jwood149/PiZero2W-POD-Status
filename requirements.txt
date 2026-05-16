@@ -1,5 +1,5 @@
 luma.lcd>=2.12
 psutil>=5.9
-Pillow>=10,<11
+Pillow>=10
 gpiozero>=2.0
 lgpio>=0.2
