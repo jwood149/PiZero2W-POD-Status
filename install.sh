@@ -22,7 +22,8 @@ apt-get install -y \
   python3 python3-venv python3-pip \
   python3-pil python3-psutil \
   fonts-dejavu-core \
-  libraspberrypi-bin
+  libraspberrypi-bin \
+  libjpeg-dev libfreetype6-dev zlib1g-dev
 
 echo "==> Enabling SPI in $CONFIG_TXT"
 if grep -qE '^\s*#\s*dtparam=spi=on' "$CONFIG_TXT"; then
