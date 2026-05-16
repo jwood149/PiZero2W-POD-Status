@@ -39,7 +39,7 @@ STATE_PATH = Path("/var/lib/pod-status/state.json")
 DEFAULT_STATE = {"rotation": 0, "screen_on": True, "current_page": 0}
 
 BACKGROUND_PATH = Path("/opt/pod-status/background.png")
-BACKGROUND_DIM_ALPHA = 0.80
+BACKGROUND_DIM_ALPHA = 0.65
 
 NTP_SYNC_PATH = Path("/run/systemd/timesync/synchronized")
 VCGENCMD = "/usr/bin/vcgencmd"
