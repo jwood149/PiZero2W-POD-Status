@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Argon POD 2.8" TFT status panel for headless Pi Zero 2W."""
 
+from __future__ import annotations
+
 import json
+import os
 import socket
 import subprocess
 import threading
@@ -22,7 +25,8 @@ SPI_PORT = 0
 SPI_DEVICE = 0
 SPI_HZ = 24_000_000
 
-BTN_ROTATE = 16
+BTN_PAGE = 16
+BTN_ROTATE = 20
 BTN_TOGGLE = 26
 
 WIDTH = 320
@@ -30,11 +34,16 @@ HEIGHT = 240
 REFRESH_SECONDS = 2
 DEBOUNCE_SECONDS = 0.05
 
+PAGES = 2
+
 STATE_PATH = Path("/var/lib/pod-status/state.json")
-DEFAULT_STATE = {"rotation": 0, "screen_on": True}
+DEFAULT_STATE = {"rotation": 0, "screen_on": True, "current_page": 0}
 
 NTP_SYNC_PATH = Path("/run/systemd/timesync/synchronized")
 VCGENCMD = "/usr/bin/vcgencmd"
+SYSTEMCTL = "/usr/bin/systemctl"
+
+TRACKED_SERVICES = ["ssh", "rpi-connect"]
 
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
@@ -61,6 +70,7 @@ class State:
             pass
         self.rotation = int(loaded.get("rotation", 0)) % 4
         self.screen_on = bool(loaded.get("screen_on", True))
+        self.current_page = int(loaded.get("current_page", 0)) % PAGES
 
     def cycle_rotation(self):
         with self.lock:
@@ -74,13 +84,23 @@ class State:
         self.dirty.set()
         self._save()
 
+    def cycle_page(self):
+        with self.lock:
+            self.current_page = (self.current_page + 1) % PAGES
+        self.dirty.set()
+        self._save()
+
     def snapshot(self):
         with self.lock:
-            return self.rotation, self.screen_on
+            return self.rotation, self.screen_on, self.current_page
 
     def _save(self):
         with self.lock:
-            payload = {"rotation": self.rotation, "screen_on": self.screen_on}
+            payload = {
+                "rotation": self.rotation,
+                "screen_on": self.screen_on,
+                "current_page": self.current_page,
+            }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
@@ -121,10 +141,6 @@ def ntp_synced() -> bool:
 
 
 def throttle_state() -> tuple[str, tuple[int, int, int]] | None:
-    """Parse `vcgencmd get_throttled` into a short status + color.
-    Returns None when the Pi is clean (no current or sticky throttle bits)
-    or when vcgencmd is unavailable.
-    """
     try:
         result = subprocess.run(
             [VCGENCMD, "get_throttled"],
@@ -162,6 +178,54 @@ def uptime_str() -> str:
     return f"{m}m"
 
 
+def pi_model() -> str:
+    try:
+        raw = Path("/proc/device-tree/model").read_text().rstrip("\x00\n").strip()
+    except OSError:
+        return "—"
+    if " Rev " in raw:
+        raw = raw.split(" Rev ")[0]
+    return raw
+
+
+def os_info() -> tuple[str, str]:
+    name, version = "—", "—"
+    try:
+        text = Path("/etc/os-release").read_text()
+    except OSError:
+        return name, version
+    for line in text.splitlines():
+        key, _, val = line.partition("=")
+        val = val.strip().strip('"')
+        if key == "PRETTY_NAME":
+            name = val
+        elif key == "VERSION":
+            version = val
+    return name, version
+
+
+def kernel_release() -> str:
+    try:
+        return os.uname().release
+    except OSError:
+        return "—"
+
+
+def services_status(services: list[str]) -> dict[str, str]:
+    """One systemctl invocation for all services — is-active prints one
+    status per line in argument order regardless of overall exit code."""
+    try:
+        result = subprocess.run(
+            [SYSTEMCTL, "is-active", *services],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return {s: "unknown" for s in services}
+    lines = result.stdout.strip().split("\n")
+    return {s: (lines[i] if i < len(lines) else "unknown")
+            for i, s in enumerate(services)}
+
+
 def draw_bar(draw, x, y, w, h, frac, label, value, font):
     frac = max(0.0, min(1.0, frac))
     draw.rectangle((x, y, x + w, y + h), fill=BAR_BG)
@@ -170,10 +234,36 @@ def draw_bar(draw, x, y, w, h, frac, label, value, font):
     draw.text((x + w + 6, y - 2), value, font=font, fill=WHITE)
 
 
-def render_status(device, fonts):
-    f_small, f_med, f_big = fonts
-
+def render_header(draw, fonts):
+    f_small, _, f_big = fonts
     hostname = socket.gethostname()
+    now = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    synced = ntp_synced()
+
+    draw.text((4, 2), hostname, font=f_big, fill=ACCENT)
+    sync_mark = "OK" if synced else "NO"
+    sync_color = GOOD if synced else BAD
+    draw.text((WIDTH - 130, 4), sync_mark, font=f_small, fill=sync_color)
+    draw.text((WIDTH - 108, 4), f"{now} UTC", font=f_small, fill=WHITE)
+    draw.line((4, 30, WIDTH - 4, 30), fill=DIM)
+
+
+def render_footer(draw, fonts, page):
+    f_small = fonts[0]
+    y = HEIGHT - 16
+    draw.text((4, y), f"up {uptime_str()}", font=f_small, fill=DIM)
+
+    throttle = throttle_state()
+    if throttle is not None:
+        label, color = throttle
+        draw.text((WIDTH - 86, y), label, font=f_small, fill=color)
+
+    draw.text((WIDTH - 36, y), f"{page + 1}/{PAGES}", font=f_small, fill=DIM)
+
+
+def render_stats(device, fonts):
+    f_small, f_med, _ = fonts
+
     wlan_ip = primary_ip("wlan") or "—"
     eth_ip = primary_ip("eth") or primary_ip("en")
     cpu_pct = psutil.cpu_percent(interval=None)
@@ -182,20 +272,9 @@ def render_status(device, fonts):
     disk = psutil.disk_usage("/")
     temp = cpu_temp_c()
     freq = cpu_freq_mhz()
-    now = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    synced = ntp_synced()
-    throttle = throttle_state()
 
     with canvas(device) as draw:
-        draw.text((4, 2), hostname, font=f_big, fill=ACCENT)
-
-        clock_text = f"{now} UTC"
-        sync_mark = "OK" if synced else "NO"
-        sync_color = GOOD if synced else BAD
-        draw.text((WIDTH - 130, 4), sync_mark, font=f_small, fill=sync_color)
-        draw.text((WIDTH - 108, 4), clock_text, font=f_small, fill=WHITE)
-
-        draw.line((4, 30, WIDTH - 4, 30), fill=DIM)
+        render_header(draw, fonts)
 
         y = 36
         draw.text((4, y), "wlan0", font=f_small, fill=DIM)
@@ -228,9 +307,8 @@ def render_status(device, fonts):
                   font=f_small, fill=DIM)
         y += 20
 
-        swap_pct = swap.percent
-        draw_bar(draw, bar_x, y, bar_w, bar_h, swap_pct / 100.0,
-                 "Swap", f"{swap_pct:5.1f}%", f_small)
+        draw_bar(draw, bar_x, y, bar_w, bar_h, swap.percent / 100.0,
+                 "Swap", f"{swap.percent:5.1f}%", f_small)
         if swap.total > 0:
             draw.text((bar_x + bar_w + 60, y - 2),
                       f"{swap.used // 1024 // 1024}/{swap.total // 1024 // 1024}MB",
@@ -245,12 +323,54 @@ def render_status(device, fonts):
         draw.text((bar_x + bar_w + 60, y - 2),
                   f"{disk.used // (1024**3)}/{disk.total // (1024**3)}GB",
                   font=f_small, fill=DIM)
-        y += 24
 
-        draw.text((4, y), f"up {uptime_str()}", font=f_small, fill=DIM)
-        if throttle is not None:
-            label, color = throttle
-            draw.text((WIDTH - 40, y), label, font=f_small, fill=color)
+        render_footer(draw, fonts, page=0)
+
+
+def render_system(device, fonts):
+    f_small = fonts[0]
+
+    model = pi_model()
+    os_name, os_version = os_info()
+    kernel = kernel_release()
+    statuses = services_status(TRACKED_SERVICES)
+
+    with canvas(device) as draw:
+        render_header(draw, fonts)
+
+        y = 38
+        rows = [
+            ("Model", model),
+            ("OS", os_name),
+            ("Ver", os_version),
+            ("Kernel", kernel),
+        ]
+        for label, value in rows:
+            draw.text((4, y), label, font=f_small, fill=DIM)
+            draw.text((76, y), value, font=f_small, fill=WHITE)
+            y += 20
+
+        draw.line((4, y + 2, WIDTH - 4, y + 2), fill=DIM)
+        y += 10
+
+        service_rows = [
+            ("SSH", statuses.get("ssh", "unknown")),
+            ("Connect", statuses.get("rpi-connect", "unknown")),
+        ]
+        for label, value in service_rows:
+            color = GOOD if value == "active" else DIM
+            draw.text((4, y), label, font=f_small, fill=DIM)
+            draw.text((76, y), value, font=f_small, fill=color)
+            y += 20
+
+        render_footer(draw, fonts, page=1)
+
+
+def render_page(device, fonts, page):
+    if page == 1:
+        render_system(device, fonts)
+    else:
+        render_stats(device, fonts)
 
 
 def render_blank(device):
@@ -273,14 +393,16 @@ def main():
         ImageFont.truetype(FONT_BOLD, 24),
     )
 
+    btn_page = Button(BTN_PAGE, pull_up=True, bounce_time=DEBOUNCE_SECONDS)
     btn_rotate = Button(BTN_ROTATE, pull_up=True, bounce_time=DEBOUNCE_SECONDS)
     btn_toggle = Button(BTN_TOGGLE, pull_up=True, bounce_time=DEBOUNCE_SECONDS)
+    btn_page.when_pressed = state.cycle_page
     btn_rotate.when_pressed = state.cycle_rotation
     btn_toggle.when_pressed = state.toggle_screen
 
     psutil.cpu_percent(interval=None)
 
-    current_rotation, current_on = state.snapshot()
+    current_rotation, current_on, current_page = state.snapshot()
     device = make_device(current_rotation)
     if not current_on:
         render_blank(device)
@@ -288,17 +410,18 @@ def main():
     while True:
         if state.dirty.is_set():
             state.dirty.clear()
-            new_rotation, new_on = state.snapshot()
+            new_rotation, new_on, new_page = state.snapshot()
             if new_rotation != current_rotation:
                 device = make_device(new_rotation)
                 current_rotation = new_rotation
+            current_page = new_page
             if new_on != current_on:
                 current_on = new_on
                 if not current_on:
                     render_blank(device)
 
         if current_on:
-            render_status(device, fonts)
+            render_page(device, fonts, current_page)
 
         time.sleep(REFRESH_SECONDS)
 
