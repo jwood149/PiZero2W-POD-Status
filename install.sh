@@ -20,8 +20,9 @@ echo "==> Installing system packages"
 apt-get update
 apt-get install -y \
   python3 python3-venv python3-pip \
+  python3-pil python3-psutil \
   fonts-dejavu-core \
-  libjpeg-dev libfreetype6-dev zlib1g-dev
+  libraspberrypi-bin
 
 echo "==> Enabling SPI in $CONFIG_TXT"
 if grep -qE '^\s*#\s*dtparam=spi=on' "$CONFIG_TXT"; then
@@ -52,8 +53,9 @@ mkdir -p "$STATE_DIR"
 chown "$SERVICE_USER":"$SERVICE_USER" "$STATE_DIR"
 chmod 0750 "$STATE_DIR"
 
-echo "==> Creating virtualenv and installing Python deps"
-python3 -m venv "$INSTALL_DIR/venv"
+echo "==> Creating virtualenv (--system-site-packages: uses apt's Pillow + psutil, skips slow source compile)"
+rm -rf "$INSTALL_DIR/venv"
+python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
 "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
 

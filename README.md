@@ -69,11 +69,12 @@ sudo reboot
 ```
 
 The installer:
-- Installs `python3-venv`, `python3-pip`, `fonts-dejavu-core`
+- Installs system Python plus `python3-pil` (Pillow), `python3-psutil`, `fonts-dejavu-core`, and `libraspberrypi-bin` (provides `vcgencmd`)
 - Enables `dtparam=spi=on` in `config.txt` (idempotent)
 - Creates an unprivileged system user `pod-status` and adds it to the `spi` + `gpio` groups
 - Copies sources to `/opt/pod-status/` (root-owned, read-only to the service)
-- Creates a virtualenv at `/opt/pod-status/venv` and pip-installs `luma.lcd`, `psutil`, `Pillow`, `gpiozero`, `lgpio`
+- Creates a virtualenv at `/opt/pod-status/venv` **with `--system-site-packages`** so apt's Pillow and psutil are used directly — no slow pip source-compile
+- pip-installs `luma.lcd`, `gpiozero`, `lgpio` (which all have piwheels-cached wheels for armv7l)
 - Creates `/var/lib/pod-status/` (writable only by the service user, mode 0750)
 - Installs and enables `pod-status.service`
 

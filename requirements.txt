@@ -1,5 +1,6 @@
+# Pillow and psutil come from apt (python3-pil, python3-psutil) via
+# --system-site-packages in the venv — keeps installs fast and avoids
+# the libjpeg/freetype/zlib source-build dance on Pi.
 luma.lcd>=2.12
-psutil>=5.9
-Pillow>=10
 gpiozero>=2.0
 lgpio>=0.2
