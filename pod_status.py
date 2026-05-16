@@ -355,8 +355,8 @@ def render_stats(device, fonts, background):
     draw.line((4, y, WIDTH - 4, y), fill=DIM)
     y += 8
 
-    bar_x, bar_w, bar_h = 52, 120, 10
-    right_x = bar_x + bar_w + 50
+    bar_x, bar_w, bar_h = 52, 100, 10
+    right_x = bar_x + bar_w + 64
 
     draw_bar(draw, bar_x, y, bar_w, bar_h, cpu_pct / 100.0,
              "CPU", f"{cpu_pct:5.1f}%", f_small)

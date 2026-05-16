@@ -148,6 +148,7 @@ Button input is routed separately through `pigpiod` — gpiozero with `GPIOZERO_
 | `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0`, `/dev/gpiomem`, `/dev/vcio` (rw) | Only the three devices it actually needs. Button GPIO goes through pigpiod (socket, not device); display DC/RST goes through `/dev/gpiomem` (kernel-restricted GPIO register window) |
 | `NoNewPrivileges=yes` | Can't gain privileges via setuid binaries |
 | `ProtectKernelTunables/Modules/Logs=yes` | Can't poke `/proc/sys`, can't load modules, can't read kernel ring buffer |
+| `ProtectProc=` left at default | Service can *see* all processes in `/proc/` (needed for the process-count breakdown on Page 1). It still can't modify them — `NoNewPrivileges` + empty capability set means no signals, no ptrace, nothing. Same model as `top`/`htop` running as your user. |
 | `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes` | Can't create namespaces, can't request RT scheduling, can't create setuid files |
 | `LockPersonality=yes`, `MemoryDenyWriteExecute=yes` | Can't change exec personality, can't allocate W+X memory (no JIT) |
 | `SystemCallFilter=@system-service` minus `@privileged @resources` | Syscall surface trimmed to the @system-service set |
