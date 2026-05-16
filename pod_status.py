@@ -15,9 +15,8 @@ from pathlib import Path
 import psutil
 from gpiozero import Button
 from luma.core.interface.serial import spi
-from luma.core.render import canvas
 from luma.lcd.device import ili9341
-from PIL import Image, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 GPIO_DC = 22
 GPIO_RST = 27
@@ -38,6 +37,9 @@ PAGES = 2
 
 STATE_PATH = Path("/var/lib/pod-status/state.json")
 DEFAULT_STATE = {"rotation": 0, "screen_on": True, "current_page": 0}
+
+BACKGROUND_PATH = Path("/opt/pod-status/background.png")
+BACKGROUND_DIM_ALPHA = 0.80
 
 NTP_SYNC_PATH = Path("/run/systemd/timesync/synchronized")
 VCGENCMD = "/usr/bin/vcgencmd"
@@ -140,21 +142,63 @@ def ntp_synced() -> bool:
     return NTP_SYNC_PATH.exists()
 
 
+def loadavg() -> tuple[float, float, float]:
+    try:
+        return os.getloadavg()
+    except (OSError, AttributeError):
+        return (0.0, 0.0, 0.0)
+
+
+def process_counts() -> dict[str, int]:
+    counts = {"total": 0, "running": 0, "sleeping": 0, "zombie": 0, "stopped": 0}
+    sleeping_set = {
+        psutil.STATUS_SLEEPING,
+        psutil.STATUS_DISK_SLEEP,
+        getattr(psutil, "STATUS_IDLE", "idle"),
+        getattr(psutil, "STATUS_WAITING", "waiting"),
+        getattr(psutil, "STATUS_WAKING", "waking"),
+        getattr(psutil, "STATUS_PARKED", "parked"),
+    }
+    stopped_set = {
+        psutil.STATUS_STOPPED,
+        getattr(psutil, "STATUS_TRACING_STOP", "tracing-stop"),
+    }
+    for p in psutil.process_iter(["status"]):
+        counts["total"] += 1
+        status = p.info.get("status")
+        if status == psutil.STATUS_RUNNING:
+            counts["running"] += 1
+        elif status in sleeping_set:
+            counts["sleeping"] += 1
+        elif status == psutil.STATUS_ZOMBIE:
+            counts["zombie"] += 1
+        elif status in stopped_set:
+            counts["stopped"] += 1
+    return counts
+
+
 def throttle_state() -> tuple[str, tuple[int, int, int]] | None:
-    try:
-        result = subprocess.run(
-            [VCGENCMD, "get_throttled"],
-            capture_output=True, text=True, timeout=2,
-        )
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    try:
-        _, hex_val = result.stdout.strip().split("=", 1)
-        bits = int(hex_val, 16)
-    except (ValueError, IndexError):
-        return None
+    fake = os.environ.get("POD_STATUS_FAKE_THROTTLED")
+    if fake:
+        try:
+            bits = int(fake, 0)
+        except ValueError:
+            return None
+    else:
+        try:
+            result = subprocess.run(
+                [VCGENCMD, "get_throttled"],
+                capture_output=True, text=True, timeout=2,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            _, hex_val = result.stdout.strip().split("=", 1)
+            bits = int(hex_val, 16)
+        except (ValueError, IndexError):
+            return None
     if bits & 0x1:
         return "UV", BAD
     if bits & 0x4:
@@ -226,6 +270,27 @@ def services_status(services: list[str]) -> dict[str, str]:
             for i, s in enumerate(services)}
 
 
+def load_background(device_mode: str) -> Image.Image | None:
+    """Read /opt/pod-status/background.png if present, resize to panel size,
+    and pre-darken so it stays subtle behind the foreground text."""
+    if not BACKGROUND_PATH.exists():
+        return None
+    try:
+        img = Image.open(BACKGROUND_PATH).convert(device_mode)
+        if img.size != (WIDTH, HEIGHT):
+            img = img.resize((WIDTH, HEIGHT))
+        black = Image.new(device_mode, img.size, "black")
+        return Image.blend(img, black, alpha=BACKGROUND_DIM_ALPHA)
+    except (OSError, ValueError):
+        return None
+
+
+def base_image(device, background: Image.Image | None) -> Image.Image:
+    if background is not None:
+        return background.copy()
+    return Image.new(device.mode, device.size, "black")
+
+
 def draw_bar(draw, x, y, w, h, frac, label, value, font):
     frac = max(0.0, min(1.0, frac))
     draw.rectangle((x, y, x + w, y + h), fill=BAR_BG)
@@ -238,12 +303,8 @@ def render_header(draw, fonts):
     f_small, _, f_big = fonts
     hostname = socket.gethostname()
     now = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    synced = ntp_synced()
 
     draw.text((4, 2), hostname, font=f_big, fill=ACCENT)
-    sync_mark = "OK" if synced else "NO"
-    sync_color = GOOD if synced else BAD
-    draw.text((WIDTH - 130, 4), sync_mark, font=f_small, fill=sync_color)
     draw.text((WIDTH - 108, 4), f"{now} UTC", font=f_small, fill=WHITE)
     draw.line((4, 30, WIDTH - 4, 30), fill=DIM)
 
@@ -261,7 +322,7 @@ def render_footer(draw, fonts, page):
     draw.text((WIDTH - 36, y), f"{page + 1}/{PAGES}", font=f_small, fill=DIM)
 
 
-def render_stats(device, fonts):
+def render_stats(device, fonts, background):
     f_small, f_med, _ = fonts
 
     wlan_ip = primary_ip("wlan") or "—"
@@ -272,105 +333,147 @@ def render_stats(device, fonts):
     disk = psutil.disk_usage("/")
     temp = cpu_temp_c()
     freq = cpu_freq_mhz()
+    load = loadavg()
+    procs = process_counts()
+    ncpu = psutil.cpu_count(logical=True) or 4
 
-    with canvas(device) as draw:
-        render_header(draw, fonts)
+    image = base_image(device, background)
+    draw = ImageDraw.Draw(image)
 
-        y = 36
-        draw.text((4, y), "wlan0", font=f_small, fill=DIM)
-        draw.text((68, y), wlan_ip, font=f_med, fill=WHITE)
+    render_header(draw, fonts)
+
+    y = 36
+    draw.text((4, y), "wlan0", font=f_small, fill=DIM)
+    draw.text((68, y), wlan_ip, font=f_med, fill=WHITE)
+    y += 22
+    if eth_ip:
+        draw.text((4, y), "eth0", font=f_small, fill=DIM)
+        draw.text((68, y), eth_ip, font=f_med, fill=WHITE)
         y += 22
-        if eth_ip:
-            draw.text((4, y), "eth0", font=f_small, fill=DIM)
-            draw.text((68, y), eth_ip, font=f_med, fill=WHITE)
-            y += 22
 
-        y = max(y, 84)
-        draw.line((4, y, WIDTH - 4, y), fill=DIM)
-        y += 8
+    y = max(y, 84)
+    draw.line((4, y, WIDTH - 4, y), fill=DIM)
+    y += 8
 
-        bar_x, bar_w, bar_h = 52, 150, 10
-        draw_bar(draw, bar_x, y, bar_w, bar_h, cpu_pct / 100.0,
-                 "CPU", f"{cpu_pct:5.1f}%", f_small)
-        freq_str = f"{freq/1000:.2f}GHz" if freq else "—"
-        temp_color = WARN if (temp or 0) >= 70 else WHITE
-        draw.text((bar_x + bar_w + 60, y - 2), freq_str, font=f_small, fill=WHITE)
-        if temp is not None:
-            draw.text((WIDTH - 58, y - 2), f"{temp:4.1f}°C",
-                      font=f_small, fill=temp_color)
-        y += 20
+    bar_x, bar_w, bar_h = 52, 120, 10
+    right_x = bar_x + bar_w + 50
 
-        draw_bar(draw, bar_x, y, bar_w, bar_h, ram.percent / 100.0,
-                 "RAM", f"{ram.percent:5.1f}%", f_small)
-        draw.text((bar_x + bar_w + 60, y - 2),
-                  f"{ram.used // 1024 // 1024}/{ram.total // 1024 // 1024}MB",
+    draw_bar(draw, bar_x, y, bar_w, bar_h, cpu_pct / 100.0,
+             "CPU", f"{cpu_pct:5.1f}%", f_small)
+    freq_str = f"{freq/1000:.1f}GHz" if freq else "—"
+    temp_color = WARN if (temp or 0) >= 70 else WHITE
+    draw.text((right_x, y - 2), freq_str, font=f_small, fill=WHITE)
+    if temp is not None:
+        draw.text((WIDTH - 40, y - 2), f"{temp:.0f}°C",
+                  font=f_small, fill=temp_color)
+    y += 20
+
+    draw_bar(draw, bar_x, y, bar_w, bar_h, ram.percent / 100.0,
+             "RAM", f"{ram.percent:5.1f}%", f_small)
+    draw.text((right_x, y - 2),
+              f"{ram.used // 1024 // 1024}/{ram.total // 1024 // 1024}M",
+              font=f_small, fill=DIM)
+    y += 20
+
+    draw_bar(draw, bar_x, y, bar_w, bar_h, swap.percent / 100.0,
+             "Swap", f"{swap.percent:5.1f}%", f_small)
+    if swap.total > 0:
+        draw.text((right_x, y - 2),
+                  f"{swap.used // 1024 // 1024}/{swap.total // 1024 // 1024}M",
                   font=f_small, fill=DIM)
-        y += 20
+    else:
+        draw.text((right_x, y - 2), "off", font=f_small, fill=DIM)
+    y += 20
 
-        draw_bar(draw, bar_x, y, bar_w, bar_h, swap.percent / 100.0,
-                 "Swap", f"{swap.percent:5.1f}%", f_small)
-        if swap.total > 0:
-            draw.text((bar_x + bar_w + 60, y - 2),
-                      f"{swap.used // 1024 // 1024}/{swap.total // 1024 // 1024}MB",
-                      font=f_small, fill=DIM)
-        else:
-            draw.text((bar_x + bar_w + 60, y - 2), "off",
-                      font=f_small, fill=DIM)
-        y += 20
+    draw_bar(draw, bar_x, y, bar_w, bar_h, disk.percent / 100.0,
+             "Disk", f"{disk.percent:5.1f}%", f_small)
+    draw.text((right_x, y - 2),
+              f"{disk.used // (1024**3)}/{disk.total // (1024**3)}G",
+              font=f_small, fill=DIM)
+    y += 22
 
-        draw_bar(draw, bar_x, y, bar_w, bar_h, disk.percent / 100.0,
-                 "Disk", f"{disk.percent:5.1f}%", f_small)
-        draw.text((bar_x + bar_w + 60, y - 2),
-                  f"{disk.used // (1024**3)}/{disk.total // (1024**3)}GB",
-                  font=f_small, fill=DIM)
+    load1_color = WARN if load[0] >= ncpu else WHITE
+    draw.text((4, y), "Load", font=f_small, fill=DIM)
+    draw.text((52, y), f"{load[0]:.2f}", font=f_small, fill=load1_color)
+    draw.text((104, y), f"{load[1]:.2f}", font=f_small, fill=WHITE)
+    draw.text((156, y), f"{load[2]:.2f}", font=f_small, fill=WHITE)
+    y += 18
 
-        render_footer(draw, fonts, page=0)
+    draw.text((4, y), "Procs", font=f_small, fill=DIM)
+    z_color = WARN if procs["zombie"] > 0 else WHITE
+    t_color = WARN if procs["stopped"] > 0 else WHITE
+    draw.text((52, y), f"{procs['total']}t", font=f_small, fill=WHITE)
+    draw.text((104, y), f"{procs['running']}R", font=f_small, fill=WHITE)
+    draw.text((150, y), f"{procs['sleeping']}S", font=f_small, fill=WHITE)
+    draw.text((204, y), f"{procs['zombie']}Z", font=f_small, fill=z_color)
+    draw.text((248, y), f"{procs['stopped']}T", font=f_small, fill=t_color)
+
+    render_footer(draw, fonts, page=0)
+    device.display(image)
 
 
-def render_system(device, fonts):
+def render_system(device, fonts, background):
     f_small = fonts[0]
 
     model = pi_model()
     os_name, os_version = os_info()
     kernel = kernel_release()
     statuses = services_status(TRACKED_SERVICES)
+    synced = ntp_synced()
 
-    with canvas(device) as draw:
-        render_header(draw, fonts)
+    image = base_image(device, background)
+    draw = ImageDraw.Draw(image)
 
-        y = 38
-        rows = [
-            ("Model", model),
-            ("OS", os_name),
-            ("Ver", os_version),
-            ("Kernel", kernel),
-        ]
-        for label, value in rows:
-            draw.text((4, y), label, font=f_small, fill=DIM)
-            draw.text((76, y), value, font=f_small, fill=WHITE)
-            y += 20
+    render_header(draw, fonts)
 
-        draw.line((4, y + 2, WIDTH - 4, y + 2), fill=DIM)
-        y += 10
+    y = 38
+    rows = [
+        ("Model", model),
+        ("OS", os_name),
+        ("Ver", os_version),
+        ("Kernel", kernel),
+    ]
+    for label, value in rows:
+        draw.text((4, y), label, font=f_small, fill=DIM)
+        draw.text((76, y), value, font=f_small, fill=WHITE)
+        y += 20
 
-        service_rows = [
-            ("SSH", statuses.get("ssh", "unknown")),
-            ("Connect", statuses.get("rpi-connect", "unknown")),
-        ]
-        for label, value in service_rows:
-            color = GOOD if value == "active" else DIM
-            draw.text((4, y), label, font=f_small, fill=DIM)
-            draw.text((76, y), value, font=f_small, fill=color)
-            y += 20
+    draw.line((4, y + 2, WIDTH - 4, y + 2), fill=DIM)
+    y += 10
 
-        render_footer(draw, fonts, page=1)
+    service_rows = [
+        ("SSH", statuses.get("ssh", "unknown"), "active"),
+        ("Connect", statuses.get("rpi-connect", "unknown"), "active"),
+        ("NTP", "synced" if synced else "not synced", "synced"),
+    ]
+    for label, value, good_value in service_rows:
+        color = GOOD if value == good_value else DIM
+        draw.text((4, y), label, font=f_small, fill=DIM)
+        draw.text((76, y), value, font=f_small, fill=color)
+        y += 20
+
+    draw.line((4, y + 2, WIDTH - 4, y + 2), fill=DIM)
+    y += 10
+
+    legend = [
+        ("▶", "next", 8),
+        ("↻", "rotate", 108),
+        ("☀☾", "on/off", 208),
+    ]
+    for icon, text, x in legend:
+        draw.text((x, y), icon, font=f_small, fill=ACCENT)
+        icon_w = 12 if len(icon) == 1 else 22
+        draw.text((x + icon_w, y), text, font=f_small, fill=DIM)
+
+    render_footer(draw, fonts, page=1)
+    device.display(image)
 
 
-def render_page(device, fonts, page):
+def render_page(device, fonts, background, page):
     if page == 1:
-        render_system(device, fonts)
+        render_system(device, fonts, background)
     else:
-        render_stats(device, fonts)
+        render_stats(device, fonts, background)
 
 
 def render_blank(device):
@@ -404,6 +507,7 @@ def main():
 
     current_rotation, current_on, current_page = state.snapshot()
     device = make_device(current_rotation)
+    background = load_background(device.mode)
     if not current_on:
         render_blank(device)
 
@@ -421,7 +525,7 @@ def main():
                     render_blank(device)
 
         if current_on:
-            render_page(device, fonts, current_page)
+            render_page(device, fonts, background, current_page)
 
         time.sleep(REFRESH_SECONDS)
 

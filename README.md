@@ -11,15 +11,18 @@ Companion to [PiZero2W-PINN-ArgonPOD](../PiZero2W-PINN-ArgonPOD/) — that repo 
 ### Page 1 — Stats
 
 ```
-hostname              OK 12:34:56 UTC
+hostname                 12:34:56 UTC
 ─────────────────────────────────────────
 wlan0   192.168.1.42
 eth0    192.168.1.43
 ─────────────────────────────────────────
-CPU  ████████░░  23.4%   1.20GHz  45.2°C
-RAM  █████░░░░░  52.1%   508/976MB
-Swap ░░░░░░░░░░   0.0%   0/512MB
-Disk ███░░░░░░░  31.0%   4/14GB
+CPU  ██████░░░░  23.4%    1.2GHz   45°C
+RAM  █████░░░░░  52.1%    508/976M
+Swap ░░░░░░░░░░   0.0%    off
+Disk ███░░░░░░░  31.0%    4/14G
+
+Load  0.42  0.31  0.28
+Procs 178t  2R  174S  0Z  0T
 
 up 2d 14h 7m              UV     1/2
 ```
@@ -27,7 +30,7 @@ up 2d 14h 7m              UV     1/2
 ### Page 2 — System
 
 ```
-hostname              OK 12:34:56 UTC
+hostname                 12:34:56 UTC
 ─────────────────────────────────────────
 Model   Raspberry Pi Zero 2 W
 OS      Raspberry Pi OS Lite (Trixie)
@@ -36,18 +39,35 @@ Kernel  6.6.51-rpt2-v7
 ─────────────────────────────────────────
 SSH       active
 Connect   inactive
+NTP       synced
+─────────────────────────────────────────
+▶ next    ↻ rotate    ☀☾ on/off
 
 up 2d 14h 7m                     2/2
 ```
 
 ### Screen elements
 
-- **Clock (header, both pages):** UTC, sourced from systemd-timesyncd. `OK` (green) next to the time means NTP is synced; `NO` (red) means it hasn't synced yet (or timesyncd isn't running).
-- **Stats bars (Page 1):** CPU% with current clock speed and SoC temperature; RAM used/total in MB; Swap (covers both real swap and zram-backed swap — psutil sums them); root disk used/total in GB.
+- **Clock (header, both pages):** UTC, sourced from systemd-timesyncd. NTP sync state lives on Page 2 (under services) rather than the header, to keep the header uncluttered.
+- **Stats bars (Page 1):** CPU% with current clock speed and SoC temp (the Pi Zero 2W has one die-temperature sensor that covers CPU + GPU); RAM used/total in MB; Swap (covers both real swap and zram-backed swap — psutil sums them); root disk used/total in GB.
+- **Load average (Page 1):** 1/5/15-min load. The 1-min value turns amber when it meets or exceeds the core count (4 on a Pi Zero 2W) — sustained load over that means saturation.
+- **Process counts (Page 1):** total / Running / Sleeping / Zombie / Stopped. Zombie and Stopped counts turn amber if nonzero.
 - **System info (Page 2):** Pi model from `/proc/device-tree/model`, OS pretty name + version from `/etc/os-release`, kernel from `uname -r`.
-- **Service status (Page 2):** `systemctl is-active` results for the services in `TRACKED_SERVICES` (default: `ssh`, `rpi-connect`). Green when active, dim otherwise. Edit the list in [pod_status.py](pod_status.py) to add more (e.g. `avahi-daemon`, `NetworkManager`, `fail2ban`).
+- **Service status (Page 2):** `systemctl is-active` results for the services in `TRACKED_SERVICES` (default: `ssh`, `rpi-connect`). Plus NTP synced/not-synced from `/run/systemd/timesync/synchronized`. Green when active/synced, dim otherwise. Edit the list in [pod_status.py](pod_status.py) to add more (e.g. `avahi-daemon`, `NetworkManager`, `fail2ban`).
+- **Button legend (Page 2):** ▶ = next page (Button 1 / GPIO 16), ↻ = cycle rotation (Button 2 / GPIO 20), ☀☾ = toggle screen on/off (Button 4 / GPIO 26).
 - **Throttle indicator (footer, both pages):** parses `vcgencmd get_throttled`. Blank = clean. `UV` (red) = currently under-voltage. `THR` (red) = currently throttled. `CAP` (amber) = ARM frequency or soft-temp cap active. `△` (amber) = throttled or under-voltage at some point since boot but ok right now.
 - **Page indicator (footer, both pages):** `N/total` in the bottom-right corner.
+
+### Optional background image
+
+Drop a PNG at `/opt/pod-status/background.png` and the renderer composites it under everything, pre-darkened to ~20% brightness so the foreground stays readable. Any size works — it's resized to 320×240 on load.
+
+```bash
+sudo cp my-pi-logo.png /opt/pod-status/background.png
+sudo systemctl restart pod-status
+```
+
+Skipped if the file is absent (plain black background). Not bundled in the repo — the official Raspberry Pi logo has trademark conditions, so pick a logo you're comfortable redistributing.
 
 ---
 
@@ -151,6 +171,41 @@ sudo systemctl status pod-status
 sudo systemctl restart pod-status
 sudo journalctl -u pod-status -f
 ```
+
+---
+
+## Testing the throttle / undervoltage indicator
+
+Real undervoltage happens when the Pi's input drops below ~4.65V — hard to trigger reproducibly without a marginal supply. Two ways to see the indicator without that:
+
+**Software fake (no hardware needed):**
+
+```bash
+sudo systemctl edit pod-status
+```
+
+Add the override:
+```
+[Service]
+Environment=POD_STATUS_FAKE_THROTTLED=0x1
+```
+
+Then `sudo systemctl restart pod-status`. Values you can try:
+- `0x1` — currently under-voltage → `UV` red
+- `0x4` — currently throttled → `THR` red
+- `0x2` or `0x8` — frequency / soft-temp cap → `CAP` amber
+- `0x10000` — sticky bit only → `△` amber
+- `0x0` (or remove the line) — clean
+
+**Physical (real undervoltage):**
+
+Run CPU stress on a marginal supply or with a thin/long USB cable:
+```bash
+sudo apt install stress-ng
+stress-ng --cpu 4 --timeout 60s
+```
+
+A quality 5V/2.5A supply with a short thick cable should *not* trigger UV. If yours does, that's diagnostic — your power chain is the weak link.
 
 ---
 
