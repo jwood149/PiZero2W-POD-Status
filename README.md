@@ -58,32 +58,6 @@ up 2d 14h 7m                     2/2
 - **Throttle indicator (footer, both pages):** parses `vcgencmd get_throttled`. Blank = clean. `UV` (red) = currently under-voltage. `THR` (red) = currently throttled. `CAP` (amber) = ARM frequency or soft-temp cap active. `△` (amber) = throttled or under-voltage at some point since boot but ok right now.
 - **Page indicator (footer, both pages):** `N/total` in the bottom-right corner.
 
-### Background image
-
-The installer generates a stylized greyscale raspberry at `/opt/pod-status/background.png` by default (see [generate_background.py](generate_background.py) — overlapping circles in a heart-shape with two leaves, no trademark concerns). The renderer composites it under everything, pre-darkened to ~20% brightness so it stays subtle and the foreground text remains high-contrast.
-
-To use your own image instead:
-
-```bash
-sudo cp my-pi-logo.png /opt/pod-status/background.png
-sudo systemctl restart pod-status
-```
-
-Any size works — it's resized to 320×240 on load. To regenerate the default after overwriting:
-
-```bash
-sudo /opt/pod-status/venv/bin/python /opt/pod-status/generate_background.py --force
-sudo systemctl restart pod-status
-```
-
-To go without a background entirely:
-
-```bash
-sudo rm /opt/pod-status/background.png
-sudo systemctl restart pod-status
-```
-
-The renderer falls back to plain black when the file is absent.
 
 ---
 
