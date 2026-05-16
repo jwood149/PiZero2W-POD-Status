@@ -360,7 +360,12 @@ def render_stats(device, fonts, background):
 
     draw_bar(draw, bar_x, y, bar_w, bar_h, cpu_pct / 100.0,
              "CPU", f"{cpu_pct:5.1f}%", f_small)
-    freq_str = f"{freq/1000:.1f}GHz" if freq else "—"
+    if freq is None:
+        freq_str = "—"
+    elif freq < 1000:
+        freq_str = f"{freq:.0f}MHz"
+    else:
+        freq_str = f"{freq/1000:.1f}GHz"
     temp_color = WARN if (temp or 0) >= 70 else WHITE
     draw.text((right_x, y - 2), freq_str, font=f_small, fill=WHITE)
     if temp is not None:
