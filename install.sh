@@ -18,7 +18,10 @@ fi
 
 echo "==> Installing system packages"
 apt-get update
-apt-get install -y python3 python3-venv python3-pip fonts-dejavu-core
+apt-get install -y \
+  python3 python3-venv python3-pip \
+  fonts-dejavu-core \
+  libjpeg-dev libfreetype6-dev zlib1g-dev
 
 echo "==> Enabling SPI in $CONFIG_TXT"
 if grep -qE '^\s*#\s*dtparam=spi=on' "$CONFIG_TXT"; then
