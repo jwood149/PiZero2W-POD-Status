@@ -113,7 +113,9 @@ After reboot, the panel comes up shortly after `network-online.target`.
 
 ## Security model
 
-The service runs as a dedicated unprivileged system user `pod-status` with no login shell, no home directory, and two group memberships: `spi` (for `/dev/spidev0.0`) and `video` (for `/dev/vcio`, used by `vcgencmd`). GPIO access is delegated to `pigpiod` over a localhost socket — our service never opens `/dev/mem` or `/dev/gpiochip0` directly, so it doesn't need the `gpio` group at all.
+The service runs as a dedicated unprivileged system user `pod-status` with no login shell, no home directory, and three group memberships: `spi` (for `/dev/spidev0.0`), `gpio` (for `/dev/gpiomem` — luma.lcd uses RPi.GPIO internally for the display's DC/RST pins, and RPi.GPIO talks to the kernel-restricted `/dev/gpiomem` rather than full `/dev/mem` when running as non-root), and `video` (for `/dev/vcio`, used by `vcgencmd`).
+
+Button input is routed separately through `pigpiod` — gpiozero with `GPIOZERO_PIN_FACTORY=pigpio` connects to the daemon's localhost socket instead of touching GPIO hardware directly.
 
 `pod-status.service` adds the standard systemd sandbox layer on top:
 
@@ -123,7 +125,7 @@ The service runs as a dedicated unprivileged system user `pod-status` with no lo
 | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/pod-status` | Whole filesystem is read-only except the state dir |
 | `ProtectHome=yes` | `/home`, `/root`, `/run/user` invisible |
 | `PrivateTmp=yes` | Private `/tmp` |
-| `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0`, `/dev/vcio` (rw) | Only the two devices it actually needs — GPIO chip goes through pigpiod |
+| `DevicePolicy=closed` + `DeviceAllow=/dev/spidev0.0`, `/dev/gpiomem`, `/dev/vcio` (rw) | Only the three devices it actually needs. Button GPIO goes through pigpiod (socket, not device); display DC/RST goes through `/dev/gpiomem` (kernel-restricted GPIO register window) |
 | `NoNewPrivileges=yes` | Can't gain privileges via setuid binaries |
 | `ProtectKernelTunables/Modules/Logs=yes` | Can't poke `/proc/sys`, can't load modules, can't read kernel ring buffer |
 | `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes` | Can't create namespaces, can't request RT scheduling, can't create setuid files |

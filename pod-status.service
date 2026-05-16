@@ -36,6 +36,7 @@ MemoryDenyWriteExecute=yes
 PrivateDevices=no
 DevicePolicy=closed
 DeviceAllow=/dev/spidev0.0 rw
+DeviceAllow=/dev/gpiomem rw
 DeviceAllow=/dev/vcio rw
 
 # Capability and syscall restrictions
