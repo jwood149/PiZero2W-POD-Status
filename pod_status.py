@@ -181,6 +181,42 @@ def process_counts() -> dict[str, int]:
     return counts
 
 
+def net_rate_bytes() -> tuple[float, float]:
+    """Aggregate rx/tx bytes per second across physical interfaces. Skips
+    loopback and common virtual bridges. Uses a function-attribute cache
+    for the previous sample so the first call returns (0, 0) and primes."""
+    now = time.monotonic()
+    counters = psutil.net_io_counters(pernic=True)
+    total_rx = 0
+    total_tx = 0
+    for iface, c in counters.items():
+        if iface == "lo" or iface.startswith(("docker", "veth", "br-")):
+            continue
+        total_rx += c.bytes_recv
+        total_tx += c.bytes_sent
+
+    prev = getattr(net_rate_bytes, "_prev", None)
+    net_rate_bytes._prev = (total_rx, total_tx, now)
+    if prev is None:
+        return 0.0, 0.0
+    prev_rx, prev_tx, prev_now = prev
+    dt = now - prev_now
+    if dt <= 0:
+        return 0.0, 0.0
+    return max(0, total_rx - prev_rx) / dt, max(0, total_tx - prev_tx) / dt
+
+
+def format_rate(bytes_per_sec: float) -> str:
+    """1.2KB/s, 3.4MB/s — fixed-width fields so the row doesn't jitter."""
+    if bytes_per_sec < 1024:
+        return f"{bytes_per_sec:4.0f}B/s"
+    if bytes_per_sec < 1024 * 1024:
+        return f"{bytes_per_sec/1024:4.1f}KB/s"
+    if bytes_per_sec < 1024 * 1024 * 1024:
+        return f"{bytes_per_sec/(1024*1024):4.1f}MB/s"
+    return f"{bytes_per_sec/(1024**3):4.1f}GB/s"
+
+
 def throttle_state() -> tuple[str, tuple[int, int, int]] | None:
     fake = os.environ.get("POD_STATUS_FAKE_THROTTLED")
     if fake:
@@ -334,6 +370,7 @@ def render_stats(device, fonts, background):
     freq = cpu_freq_mhz()
     load = loadavg()
     procs = process_counts()
+    rx, tx = net_rate_bytes()
     ncpu = psutil.cpu_count(logical=True) or 4
 
     with canvas(device, background=background) as draw:
@@ -409,6 +446,13 @@ def render_stats(device, fonts, background):
         draw.text((150, y), f"{procs['sleeping']}S", font=f_small, fill=WHITE)
         draw.text((204, y), f"{procs['zombie']}Z", font=f_small, fill=z_color)
         draw.text((248, y), f"{procs['stopped']}T", font=f_small, fill=t_color)
+        y += 16
+
+        draw.text((4, y), "Net", font=f_small, fill=DIM)
+        draw.text((52, y), "↓", font=f_small, fill=ACCENT)
+        draw.text((68, y), format_rate(rx), font=f_small, fill=WHITE)
+        draw.text((164, y), "↑", font=f_small, fill=ACCENT)
+        draw.text((180, y), format_rate(tx), font=f_small, fill=WHITE)
 
         render_footer(draw, fonts, page=0)
 
