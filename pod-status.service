@@ -7,6 +7,10 @@ Wants=network-online.target pigpiod.service
 Type=simple
 Environment=GPIOZERO_PIN_FACTORY=pigpio
 ExecStart=/opt/pod-status/venv/bin/python /opt/pod-status/pod_status.py
+# lgpio (the Trixie backend behind RPi.GPIO, which luma.lcd imports for DC/RST)
+# creates a notification FIFO in $PWD on import. Default cwd is / which is
+# read-only for an unprivileged service — point it at the writable state dir.
+WorkingDirectory=/var/lib/pod-status
 Restart=on-failure
 RestartSec=5
 
@@ -36,6 +40,7 @@ PrivateDevices=no
 DevicePolicy=closed
 DeviceAllow=/dev/spidev0.0 rw
 DeviceAllow=/dev/gpiomem rw
+DeviceAllow=/dev/gpiochip0 rw
 DeviceAllow=/dev/vcio rw
 
 # Capability and syscall restrictions
