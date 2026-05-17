@@ -23,8 +23,16 @@ apt-get install -y \
   python3-pil python3-psutil python3-gpiozero python3-pigpio \
   pigpio \
   fonts-dejavu-core \
-  libraspberrypi-bin \
   libjpeg-dev libfreetype6-dev zlib1g-dev
+
+# vcgencmd (used by throttle_state) lives in libraspberrypi-bin on Bookworm
+# and earlier; Trixie split it into raspi-utils-core. Install whichever the
+# running OS exposes — apt-cache returns empty for the missing one.
+if apt-cache show libraspberrypi-bin 2>/dev/null | grep -q '^Package:'; then
+  apt-get install -y libraspberrypi-bin
+else
+  apt-get install -y raspi-utils-core
+fi
 
 echo "==> Enabling pigpiod (GPIO daemon — talks to /dev/gpiomem as root so the service doesn't have to)"
 systemctl enable --now pigpiod
