@@ -47,11 +47,11 @@ NTP_SYNC_PATH = Path("/run/systemd/timesync/synchronized")
 VCGENCMD = "/usr/bin/vcgencmd"
 SYSTEMCTL = "/usr/bin/systemctl"
 
-TRACKED_SERVICES = ["ssh", "rpi-connect", "rpi-connect-lite"]
-# Pi Connect ships as two systemd units depending on OS variant:
-# rpi-connect.service on Desktop/Full, rpi-connect-lite.service on Lite.
-# The "Connect" status row is "active" if either is active.
-CONNECT_UNITS = ("rpi-connect", "rpi-connect-lite")
+TRACKED_SERVICES = ["ssh"]
+# Pi Connect runs as a USER-scope systemd service (rpi-connect.service inside
+# `systemctl --user`), not a system service — our process can't see it via
+# system-scope `systemctl is-active`. Detect it by its agent process instead,
+# which works for both rpi-connect (Desktop/Full) and rpi-connect-lite (Lite).
 
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
@@ -276,6 +276,21 @@ def pi_model() -> str:
     return raw
 
 
+def rpi_connect_active() -> bool:
+    """Pi Connect runs under the user's systemd instance, which system-scope
+    `systemctl is-active` from this service can't see. Look for any process
+    whose name starts with rpi-connect (rpi-connect-agent, rpi-connect-event-
+    listener, etc.) — covers both Desktop/Full and Lite installs."""
+    try:
+        for proc in psutil.process_iter(["name"]):
+            name = (proc.info.get("name") or "").lower()
+            if name.startswith("rpi-connect"):
+                return True
+    except (psutil.Error, OSError):
+        pass
+    return False
+
+
 def os_info() -> tuple[str, str]:
     name, version = "—", "—"
     try:
@@ -488,12 +503,9 @@ def render_system(device, fonts, background):
         draw.line((4, y + 2, WIDTH - 4, y + 2), fill=DIM)
         y += 10
 
-        connect_status = "active" if any(
-            statuses.get(u) == "active" for u in CONNECT_UNITS
-        ) else "inactive"
         service_rows = [
             ("SSH", statuses.get("ssh", "unknown"), "active"),
-            ("Connect", connect_status, "active"),
+            ("Connect", "active" if rpi_connect_active() else "inactive", "active"),
             ("NTP", "synced" if synced else "not synced", "synced"),
         ]
         for label, value, good_value in service_rows:
