@@ -47,7 +47,11 @@ NTP_SYNC_PATH = Path("/run/systemd/timesync/synchronized")
 VCGENCMD = "/usr/bin/vcgencmd"
 SYSTEMCTL = "/usr/bin/systemctl"
 
-TRACKED_SERVICES = ["ssh", "rpi-connect"]
+TRACKED_SERVICES = ["ssh", "rpi-connect", "rpi-connect-lite"]
+# Pi Connect ships as two systemd units depending on OS variant:
+# rpi-connect.service on Desktop/Full, rpi-connect-lite.service on Lite.
+# The "Connect" status row is "active" if either is active.
+CONNECT_UNITS = ("rpi-connect", "rpi-connect-lite")
 
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
@@ -484,9 +488,12 @@ def render_system(device, fonts, background):
         draw.line((4, y + 2, WIDTH - 4, y + 2), fill=DIM)
         y += 10
 
+        connect_status = "active" if any(
+            statuses.get(u) == "active" for u in CONNECT_UNITS
+        ) else "inactive"
         service_rows = [
             ("SSH", statuses.get("ssh", "unknown"), "active"),
-            ("Connect", statuses.get("rpi-connect", "unknown"), "active"),
+            ("Connect", connect_status, "active"),
             ("NTP", "synced" if synced else "not synced", "synced"),
         ]
         for label, value, good_value in service_rows:
